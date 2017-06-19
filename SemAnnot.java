@@ -13,6 +13,8 @@ import java.io.FileReader;
 import java.io.IOException;
 import java.util.*;
 
+import static java.lang.Math.log;
+
 
 /**
  * Created by Vladimir on 24.04.2017.
@@ -32,6 +34,9 @@ public class SemAnnot {
         add("INTJ");
     }};
     public static Map<Integer, String> Thesaurus = new HashMap<Integer, String>();
+    public static Map<String, Map<Integer, Integer>> termFreq = new HashMap<String, Map<Integer, Integer>>();
+    public static Map<Integer, Integer> termsInDoc = new HashMap<Integer, Integer>();
+    public static Integer docAmount = 0;
     public static Integer RESULT = 0;
 
     public static void createIndex(Map<Integer, String> Thesaurus, Map<String, Set<Integer>> Index) {
@@ -57,35 +62,29 @@ public class SemAnnot {
         }
     }
 
-    public static void processPoint(Document article, Map<String, Set<Integer>> Index){
-        Set<String> title = new HashSet<String>();
-        for(String titleword : article.getTitle().split(REGEX)){
-            if ((titleword.length() > 0) && (!titleword.isEmpty())) {
-                if (stopwords.contains(MorphoDictionary.get(titleword).getNormForm().getAttrs().get(0).toString())) {
-                    continue;
-                }
-                titleword = MorphoDictionary.get(titleword.toLowerCase()).getNorm();
-                title.add(titleword);
-            }
-        }
+    public static void processPoint(Document article, Map<String, Set<Integer>> Index, Integer doc, boolean mode){
 
         Point pnt = new Point();
         pnt.setText(article.getTitle());
 
         for (int len = 2; len <= 6; ++len) {
-            searchWindow(len, article.getTitle().split(REGEX), Index, pnt ,title);
+            searchWindow(len, article.getTitle().split(REGEX), Index, pnt , doc, mode);
         }
 
         for(Point point : article.getPoints()){
             if(point != null){
                 for (int len = 2; len <= 6; ++len) {
-                    searchWindow(len, point.toString().split(REGEX), Index, point, title);
+                    searchWindow(len, point.toString().split(REGEX), Index, point, doc, mode);
                 }
             }
         }
+        if(mode == false){
+            termsInDoc.put(doc, RESULT);
+            RESULT = 0;
+        }
     }
 
-    public static void searchWindow(Integer len, String[] words, Map<String, Set<Integer>> Index, Point point, Set<String> title){
+    public static void searchWindow(Integer len, String[] words, Map<String, Set<Integer>> Index, Point point, Integer doc, boolean mode){
         if(words.length == 0 || words.length < len){
         }
         else {
@@ -127,30 +126,36 @@ public class SemAnnot {
                     }
 
                     if (hits.size() != 0 && inMap) {
+                        Integer docSize = termsInDoc.get(doc);
                         for(Integer hit : hits ){
                             if(Thesaurus.get(hit).split(REGEX).length == len){
-                                Set<String> termWords = new HashSet<String>(Arrays.asList(windowArray));
-                                String[] newterm = Thesaurus.get(hit).split(" ");
-                                tag.setWords(newterm);
-                                termWords.retainAll(title);
-                                if(termWords.size() > 0){
-                                    double semantic = termWords.size()/(double)title.size();
-                                    tag.setSemantic(semantic);
-                                }
-                                else{
-                                    tag.setSemantic(0.01);
-                                }
-                                if(!point.getTags().contains(tag)) {
-                                    point.getTags().add(tag);
-                                }
-                                else{
-                                    for(Tag tagIter : point.getTags()){
-                                        if(tagIter.getWords().equals(tag.getWords())){
-                                            tagIter.setSemantic(tagIter.getSemantic() + 0.01);
+                                if(mode == false){
+                                    String term = Thesaurus.get(hit);
+                                    if (!termFreq.containsKey(term)) {
+                                        Map<Integer, Integer> termMap = new HashMap<Integer, Integer>();
+                                        termMap.put(doc, 1);
+                                        termFreq.put(term, termMap);
+                                    }else{
+                                        if (termFreq.get(term).containsKey(doc)) {
+                                            termFreq.get(term).put(doc, termFreq.get(term).get(doc) + 1);
+                                        } else {
+                                            termFreq.get(term).put(doc, 1);
                                         }
                                     }
+                                    RESULT++;
+                                }else {
+                                    String term = Thesaurus.get(hit);
+                                    String[] termWords = term.split(" ");
+
+                                    tag.setWords(termWords);
+                                    Double sem = (double)termFreq.get(term).get(doc) / docSize * docAmount/termFreq.get(term).keySet().size();
+                                    tag.setSemantic(sem);
+
+                                    if (!point.getTags().contains(tag)) {
+                                        point.getTags().add(tag);
+                                    }
+                                    RESULT++;
                                 }
-                                RESULT++;
                             }
                         }
 
@@ -168,7 +173,7 @@ public class SemAnnot {
 
         //1 = ВИКИ
         //0 = ОДУ
-        Integer thesaurusType = 1;
+        Integer thesaurusType = 0;
 
         BufferedReader br = null;
         FileReader fr = null;
@@ -179,7 +184,7 @@ public class SemAnnot {
             String prevLine = null;
 
             //Загрузка тезауруса в мап
-            if(thesaurusType == 0){
+            if(thesaurusType == 1){
                 String term = null;
                 br = new BufferedReader(new FileReader(THESAURUS));
                 Integer value = 0;
@@ -219,12 +224,27 @@ public class SemAnnot {
             ObjectMapper objectMapper = new ObjectMapper();
 
             File dir = new File(DIRNAME);
+            docAmount = dir.listFiles().length;
+
+            Integer docNum = 0;
             for(File file : dir.listFiles()){
                 try{
                     Document article = objectMapper.readValue(file, Document.class);
-                    processPoint(article, invIndex);
+                    processPoint(article, invIndex, docNum, false);
+                    docNum++;
+                }catch (Exception e){}
+            }
+
+            System.out.println("Scan complete");
+
+            docNum = 0;
+            for(File file : dir.listFiles()){
+                try{
+                    Document article = objectMapper.readValue(file, Document.class);
+                    processPoint(article, invIndex, docNum,  true);
                     String fName = file.getName().substring(0,file.getName().length()-5);
                     objectMapper.writeValue(new File(RESULTDIR + "\\" + fName + ".json"), article);
+                    docNum++;
                 }catch (Exception e){}
             }
 
